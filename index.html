@@ -368,13 +368,6 @@
         </div>
       </div>
 
-      <div class="card" style="margin-bottom: 1.5rem;">
-        <div class="section-label">AI Explanations (optional)</div>
-        <div class="muted" style="margin-bottom: 0.5rem;">Add a Grok API key for detailed, question-specific explanations. Leave empty to use built-in ones.</div>
-        <input type="password" id="api-key" placeholder="xAI API key" style="width:100%;padding:0.65rem 0.75rem;border-radius:10px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:0.875rem;outline:none;" onchange="saveApiKey()" onblur="saveApiKey()">
-        <div class="muted" style="margin-top:0.4rem;">Saved only on this device. Get a key at console.x.ai</div>
-      </div>
-
       <button onclick="startGame()" class="btn-primary">Start Game</button>
     </div>
   </div>
@@ -477,7 +470,11 @@
       <div id="ex-correct" style="font-weight: 600; margin-bottom: 1rem;"></div>
       <div class="muted" style="margin-bottom: 0.35rem;">Why</div>
       <div id="ex-body" style="font-size: 0.9rem; line-height: 1.55; color: var(--secondary);"></div>
-      <button onclick="closeExplain()" class="btn-primary" style="margin-top: 1.25rem; padding: 0.7rem; font-size: 0.9rem;">Close</button>
+      <div class="flex gap-2" style="margin-top: 1.25rem;">
+        <a id="ask-grok-btn" href="https://grok.com" class="btn-secondary" style="flex:1; padding: 0.7rem; font-size: 0.9rem; text-decoration: none; display: flex; align-items: center; justify-content: center;" onclick="return askGrok(event)">Ask Grok</a>
+        <button onclick="closeExplain()" class="btn-primary" style="flex:1; padding: 0.7rem; font-size: 0.9rem;">Close</button>
+      </div>
+      <div class="muted" style="margin-top: 0.5rem; text-align: center; font-size: 11px;">Opens Grok (prompt also copied). On iPhone, if Safari opens: paste into the Grok app</div>
     </div>
   </div>
 
@@ -515,15 +512,6 @@
 
     let progress = JSON.parse(localStorage.getItem('trivia_progress') || '{"xp":0,"games":0}');
     let mastered = new Set(JSON.parse(localStorage.getItem('trivia_mastered') || '[]'));
-    let apiKey = localStorage.getItem('trivia_api_key') || '';
-
-    function saveApiKey() {
-      const el = document.getElementById('api-key');
-      if (!el) return;
-      apiKey = el.value.trim();
-      if (apiKey) localStorage.setItem('trivia_api_key', apiKey);
-      else localStorage.removeItem('trivia_api_key');
-    }
 
     function getRank(xp) {
       let rank = RANKS[0];
@@ -635,8 +623,6 @@
 
       // Default difficulty is Medium (set via .on class above)
       state.difficulty = 'medium';
-      const keyEl = document.getElementById('api-key');
-      if (keyEl) keyEl.value = apiKey;
       updateHomeUI();
     }
 
@@ -952,53 +938,93 @@
         : 'Maximum rank achieved — God Mode';
     }
 
-    async function openExplain() {
+    function buildGrokPrompt(q) {
+      const lines = [
+        'Explain this trivia question clearly and educationally.',
+        'Teach the underlying idea, context, and why it matters — not only which option is correct.',
+        '',
+        'Question: ' + q.question,
+        'Correct answer: ' + q.correct_answer
+      ];
+      if (state.userChoice) {
+        lines.push('I answered: ' + state.userChoice + (state.wasCorrect ? ' (correct)' : ' (incorrect)'));
+      }
+      if (q.category) lines.push('Category: ' + q.category);
+      return lines.join('\n');
+    }
+
+    function grokWebUrl(prompt) {
+      return 'https://grok.com/?q=' + encodeURIComponent(prompt);
+    }
+
+    function copyText(text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        return navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+      }
+      return Promise.resolve(fallbackCopy(text));
+    }
+
+    function fallbackCopy(text) {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch (e) {}
+      ta.remove();
+    }
+
+    function openExplain() {
       const q = state.currentQ;
       document.getElementById('ex-q').textContent = q.question;
       document.getElementById('ex-user').textContent = state.userChoice || '—';
       document.getElementById('ex-correct').textContent = q.correct_answer;
-      const body = document.getElementById('ex-body');
-      body.innerHTML = buildExplanation(q, state.wasCorrect);
+      document.getElementById('ex-body').innerHTML = buildExplanation(q, state.wasCorrect);
 
-      const modal = document.getElementById('explain-modal');
-      modal.classList.remove('hidden');
-
-      // Hybrid: if API key present, fetch a richer AI explanation
-      if (apiKey) {
-        body.innerHTML = '<span style="opacity:0.7">Generating detailed explanation…</span>';
-        try {
-          const prompt = `Explain this trivia question clearly and educationally in 4-8 sentences. Do not just say what is correct — teach the underlying idea, context, and why it matters. Question: ${q.question} Correct answer: ${q.correct_answer} User answered: ${state.userChoice || 'nothing'} (${state.wasCorrect ? 'correct' : 'incorrect'}). Category: ${q.category || 'general'}.`;
-          const res = await fetch('https://api.x.ai/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer ' + apiKey
-            },
-            body: JSON.stringify({
-              model: 'grok-2-latest',
-              messages: [
-                { role: 'system', content: 'You are a concise, accurate trivia tutor. Explain answers in plain language. No markdown headings. Use short paragraphs.' },
-                { role: 'user', content: prompt }
-              ],
-              temperature: 0.4,
-              max_tokens: 400
-            })
-          });
-          if (!res.ok) throw new Error('API ' + res.status);
-          const data = await res.json();
-          const text = data.choices?.[0]?.message?.content?.trim();
-          if (text) {
-            body.innerHTML = text.replace(/\n/g, '<br>') + (state.wasCorrect
-              ? '<br><br><span style="opacity:0.7">You answered correctly.</span>'
-              : '<br><br><span style="opacity:0.7">Worth remembering.</span>');
-          } else {
-            body.innerHTML = buildExplanation(q, state.wasCorrect);
-          }
-        } catch (e) {
-          body.innerHTML = buildExplanation(q, state.wasCorrect) +
-            '<br><br><span style="opacity:0.6;font-size:0.8rem">AI explanation unavailable — showing built-in explanation. Check your API key or connection.</span>';
-        }
+      const link = document.getElementById('ask-grok-btn');
+      if (link && q) {
+        link.href = grokWebUrl(buildGrokPrompt(q));
       }
+
+      document.getElementById('explain-modal').classList.remove('hidden');
+    }
+
+    function askGrok(e) {
+      if (e) e.preventDefault();
+      const q = state.currentQ;
+      if (!q) {
+        alert('No question to explain.');
+        return false;
+      }
+      const prompt = buildGrokPrompt(q);
+      const web = grokWebUrl(prompt);
+      const ua = navigator.userAgent || '';
+      const isAndroid = /Android/i.test(ua);
+      const isIOS = /iPhone|iPad|iPod/i.test(ua);
+
+      // Always copy so user can paste in the Grok app if needed
+      copyText(prompt);
+
+      if (isAndroid) {
+        // Native Android app intent
+        window.location.href =
+          'intent://grok.com/?q=' + encodeURIComponent(prompt) +
+          '#Intent;scheme=https;package=ai.x.grok;S.browser_fallback_url=' +
+          encodeURIComponent(web) + ';end';
+        return false;
+      }
+
+      if (isIOS) {
+        // Same-tab navigation is required for iOS universal links to prefer the app.
+        // target=_blank almost always forces Safari.
+        window.location.href = web;
+        return false;
+      }
+
+      // Desktop: new tab is fine
+      window.open(web, '_blank', 'noopener,noreferrer');
+      return false;
     }
 
     function closeExplain() {
