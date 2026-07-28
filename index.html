@@ -110,13 +110,18 @@
     }
     .option:disabled { cursor: default; }
     .option.correct {
-      background: var(--text);
       border-color: var(--text);
-      color: var(--bg);
+      border-width: 2px;
+      background: var(--card);
+      color: var(--text);
+      font-weight: 600;
     }
     .option.incorrect {
-      border-color: var(--muted);
-      opacity: 0.5;
+      border-color: var(--border);
+      opacity: 0.45;
+    }
+    .option.picked {
+      border-color: var(--text);
     }
     .progress-track {
       background: var(--border);
@@ -166,14 +171,17 @@
       border-radius: 0.75rem;
       font-size: 11px;
       font-weight: 500;
-      border: 1px solid var(--border);
+      border: 1.5px solid var(--border);
       background: transparent;
       color: var(--text);
       cursor: pointer;
+      outline: none;
+      -webkit-tap-highlight-color: transparent;
     }
     .cat-btn.on, .diff-btn.on {
       border-color: var(--text);
       background: var(--border);
+      font-weight: 600;
     }
     .modal-backdrop {
       position: fixed;
@@ -609,21 +617,8 @@
         diffEl.appendChild(btn);
       });
 
-      const rank = getRank(progress.xp);
-      setTimeout(() => {
-        document.querySelectorAll('#diff-btns button').forEach(b => {
-          b.style.borderColor = 'var(--border)';
-          b.style.background = '';
-        });
-        const preferred = rank.level >= 10 ? 'god' : rank.level >= 7 ? 'phd' : rank.diff;
-        const target = document.querySelector(`#diff-btns button[data-diff="${preferred}"]`) || document.querySelector(`#diff-btns button[data-diff="${rank.diff}"]`);
-        if (target) {
-          target.style.borderColor = 'var(--text)';
-          target.style.background = 'var(--border)';
-          state.difficulty = target.dataset.diff;
-        }
-      }, 50);
-
+      // Default difficulty is Medium (set via .on class above)
+      state.difficulty = 'medium';
       updateHomeUI();
     }
 
@@ -963,7 +958,6 @@
     }
 
     function buildExplanation(q, wasCorrect) {
-      // Prefer a stored explanation if the offline question has one
       if (q.explanation) {
         const fb = wasCorrect
           ? `<br><br><span style="opacity:0.7">You got this right.</span>`
@@ -977,109 +971,106 @@
       const cat = (q.category || '').toLowerCase();
       const ql = question.toLowerCase();
       const shortQ = question.replace(/\?$/, '').trim();
-
       const footer = wasCorrect
         ? `<br><br><span style="opacity:0.7">You answered correctly.</span>`
         : `<br><br><span style="opacity:0.7">Worth remembering.</span>`;
 
-      // --- Math arithmetic: show the work ---
-      const arith = ql.match(/^what is (\d+)\s*([×x+\-−÷])\s*(\d+)\?$/);
-      if (arith) {
-        const a = parseInt(arith[1], 10);
-        const op = arith[2];
-        const b = parseInt(arith[3], 10);
+      let m;
+      m = ql.match(/^what is (\d+)\s*([×x*+\-−÷\/])\s*(\d+)\?$/);
+      if (m) {
+        const a = +m[1], op = m[2], b = +m[3];
         let steps = '';
-        if (op === '×' || op === 'x') steps = `${a} × ${b} = <strong>${ans}</strong>`;
-        else if (op === '+' ) steps = `${a} + ${b} = <strong>${ans}</strong>`;
+        if (op === '×' || op === 'x' || op === '*') steps = `${a} × ${b} = <strong>${ans}</strong>`;
+        else if (op === '+') steps = `${a} + ${b} = <strong>${ans}</strong>`;
         else if (op === '-' || op === '−') steps = `${a} − ${b} = <strong>${ans}</strong>`;
-        else if (op === '÷') steps = `${a} ÷ ${b} = <strong>${ans}</strong>`;
-        return `Question: ${shortQ}?<br><br>${steps}<br><br>This is basic arithmetic. Being fluent with these operations makes more advanced math much easier.` + footer;
+        else steps = `${a} ÷ ${b} = <strong>${ans}</strong>`;
+        return `<strong>Answer: ${ans}</strong><br><br>${steps}<br><br>This is basic arithmetic. Practising these operations builds speed and accuracy for harder problems.` + footer;
+      }
+      m = ql.match(/^what is (\d+)²\?$/);
+      if (m) {
+        const n = +m[1];
+        return `<strong>Answer: ${ans}</strong><br><br>${n}² means ${n} × ${n}.<br>${n} × ${n} = <strong>${ans}</strong>.<br><br>Squares appear in area formulas, physics (e.g. kinetic energy), and algebra.` + footer;
+      }
+      m = ql.match(/^what is (\d+)³\?$/);
+      if (m) {
+        const n = +m[1];
+        return `<strong>Answer: ${ans}</strong><br><br>${n}³ means ${n} × ${n} × ${n} = <strong>${ans}</strong>.<br><br>Cubes appear in volume formulas and polynomial algebra.` + footer;
+      }
+      m = ql.match(/^what is (\d+)% of (\d+)\?$/);
+      if (m) {
+        const p = +m[1], whole = +m[2];
+        return `<strong>Answer: ${ans}</strong><br><br>${p}% of ${whole} = (${p}/100) × ${whole} = <strong>${ans}</strong>.<br><br>Percentages convert a rate per hundred into a concrete amount — used in interest, statistics, and science.` + footer;
       }
 
-      // Squares / cubes
-      const sq = ql.match(/^what is (\d+)²\?$/);
-      if (sq) {
-        const n = parseInt(sq[1], 10);
-        return `${n}² means ${n} × ${n}.<br><br>${n} × ${n} = <strong>${ans}</strong>.<br><br>Squares appear constantly in geometry (area), physics (kinetic energy ∝ v²), and algebra.` + footer;
-      }
-      const cu = ql.match(/^what is (\d+)³\?$/);
-      if (cu) {
-        const n = parseInt(cu[1], 10);
-        return `${n}³ means ${n} × ${n} × ${n}.<br><br>That equals <strong>${ans}</strong>.<br><br>Cubes show up in volume formulas (e.g. sphere volume uses r³) and in algebra.` + footer;
-      }
-
-      // Percentages
-      const pct = ql.match(/^what is (\d+)% of (\d+)\?$/);
-      if (pct) {
-        const p = parseInt(pct[1], 10);
-        const whole = parseInt(pct[2], 10);
-        return `${p}% of ${whole} means (${p}/100) × ${whole}.<br><br>(${p}/100) × ${whole} = <strong>${ans}</strong>.<br><br>Percentages are used everywhere: interest rates, statistics, discounts, and science.` + footer;
-      }
-
-      // Chemical symbols
       if (ql.includes('chemical symbol') || ql.includes('symbol for')) {
-        return `The chemical symbol for this element is <strong>${ans}</strong>.<br><br>Symbols are standardized worldwide in the periodic table. Many come from Latin names (e.g. Au from <em>aurum</em> for gold, Fe from <em>ferrum</em> for iron, Na from <em>natrium</em> for sodium). They let scientists write formulas compactly and without language barriers.<br><br>Learning common symbols is one of the first steps in chemistry literacy.` + footer;
+        return `<strong>Answer: ${ans}</strong><br><br>The chemical symbol is <strong>${ans}</strong>.<br><br>Symbols are international codes from the periodic table. Many come from Latin names (Au = aurum for gold, Fe = ferrum for iron, Na = natrium for sodium). They let scientists write formulas the same way in every language.` + footer;
       }
 
-      // Capitals
       if (ql.includes('capital of') || ql.includes('capital city')) {
-        return `The capital is <strong>${ans}</strong>.<br><br>A capital is the seat of government. It is often chosen for political balance (not always the largest city), historical reasons, or geographic compromise. For example, Canberra was selected so neither Sydney nor Melbourne would dominate Australia.<br><br>Knowing capitals helps you follow international news and understand how countries organize political power.` + footer;
+        const country = shortQ.replace(/^what is the capital of\s+/i, '').replace(/^what's the capital of\s+/i, '');
+        return `<strong>Answer: ${ans}</strong><br><br>${ans} is the capital of ${country}.<br><br>A capital is the seat of government. It is often chosen for political balance, history, or geography — not always because it is the largest city.` + footer;
       }
 
-      // Acronyms / “stand for”
       if (ql.includes('stand for') || (ql.includes('what does') && (ql.includes('mean') || ql.includes('stand')))) {
-        return `<strong>${ans}</strong> is the full form.<br><br>Acronyms and initialisms compress long technical or institutional names so they can be spoken and written quickly. Once you know the expansion, the short form stops being a mystery and becomes a useful label.<br><br>This matters in science, technology, business, and government, where such abbreviations appear constantly.` + footer;
+        return `<strong>Answer: ${ans}</strong><br><br>The full form is <strong>${ans}</strong>.<br><br>The question asks you to expand an abbreviation. Once you know the full words, the short form becomes a useful label instead of a mystery.` + footer;
       }
 
-      // Directors
-      if (ql.includes('directed') || ql.includes('director of')) {
-        return `<strong>${ans}</strong> directed this film.<br><br>The director is the primary creative leader of a movie: they guide performances, visual style, pacing, and overall tone. Crediting the director is how cinema tracks artistic authorship.<br><br>Recognizing major directors helps you notice patterns in style and understand film as a crafted art, not only entertainment.` + footer;
+      if (ql.startsWith('who ') || ql.includes('who wrote') || ql.includes('who invented') || ql.includes('who discovered') || ql.includes('who directed') || ql.includes('who founded') || ql.includes('who is known') || ql.includes('who proposed')) {
+        return `<strong>Answer: ${ans}</strong><br><br>The person is <strong>${ans}</strong>.<br><br>This question asks for the individual linked to a specific work, discovery, invention, or role. Matching names to achievements is core history, science, and culture literacy.` + footer;
       }
 
-      // Years / historical dates
       if (ql.includes('in which year') || ql.includes('what year') || ql.includes('when did') || ql.includes('when was')) {
-        return `The year is <strong>${ans}</strong>.<br><br>Historical dates are anchors. They let us order events, see causes and consequences, and connect political, scientific, and cultural changes. Without specific years, history collapses into vague stories.<br><br>This particular date is widely documented and forms part of the standard timeline taught for this event.` + footer;
+        return `<strong>Answer: ${ans}</strong><br><br>The year is <strong>${ans}</strong>.<br><br>Exact dates let us order events and link causes to effects. This year is the documented date for the event in the question.` + footer;
       }
 
-      // Topic-specific teaching
+      if (ql.startsWith('how many')) {
+        return `<strong>Answer: ${ans}</strong><br><br>The correct number is <strong>${ans}</strong>.<br><br>This is a factual count fixed by definition, measurement, or historical record for the thing being asked about.` + footer;
+      }
+
+      if (ql.startsWith('what is ') || ql.startsWith('what are ') || ql.startsWith('what does ')) {
+        return `<strong>Answer: ${ans}</strong><br><br>For “${shortQ}?”, the standard answer is <strong>${ans}</strong>.<br><br>This is a definition or core fact. Learning it means you can recognise the idea later and connect it to related topics.` + footer;
+      }
+
+      if (ql.startsWith('which ')) {
+        return `<strong>Answer: ${ans}</strong><br><br>The correct choice is <strong>${ans}</strong>.<br><br>The question asks you to pick the right item from a set. <strong>${ans}</strong> is the one that matches the established fact.` + footer;
+      }
+
       if (topic === 'physics') {
-        return `Correct answer: <strong>${ans}</strong>.<br><br>Physics describes how matter, energy, space, and time behave. This fact is part of the established framework built from experiment and mathematical models (mechanics, electromagnetism, thermodynamics, quantum theory, relativity, etc.).<br><br>Understanding it helps you see why everyday phenomena — motion, electricity, heat, light — work the way they do, and it underpins engineering and technology.` + footer;
+        return `<strong>Answer: ${ans}</strong><br><br>In physics, for “${shortQ}?”, the answer is <strong>${ans}</strong>.<br><br>Physics describes matter, energy, space, and time with measurable laws. This fact is part of that framework and helps explain real-world phenomena and technology.` + footer;
       }
       if (topic === 'chemistry') {
-        return `Correct answer: <strong>${ans}</strong>.<br><br>Chemistry studies substances and how they change. This answer reflects standard chemical knowledge: elements, bonds, reactions, the periodic table, and quantitative relationships between reactants and products.<br><br>It matters because chemical principles explain materials, medicine, energy, environment, and the composition of everything around you.` + footer;
+        return `<strong>Answer: ${ans}</strong><br><br>In chemistry, the answer is <strong>${ans}</strong>.<br><br>Chemistry studies substances and how they change. This fact is standard knowledge used with formulas, reactions, and the periodic table.` + footer;
       }
       if (topic === 'biology') {
-        return `Correct answer: <strong>${ans}</strong>.<br><br>Biology is the science of living systems — cells, genetics, physiology, evolution, and ecosystems. This fact is supported by observation and experiment across those areas.<br><br>Knowing it builds literacy about health, the natural world, and how life is organized from molecules up to ecosystems.` + footer;
+        return `<strong>Answer: ${ans}</strong><br><br>In biology, the answer is <strong>${ans}</strong>.<br><br>Biology studies living systems — cells, genes, organs, evolution, ecosystems. This fact helps explain health and how life is organised.` + footer;
       }
       if (topic === 'mathematics') {
-        return `Correct answer: <strong>${ans}</strong>.<br><br>This is a standard mathematical result. Mathematics provides precise language and tools for quantity, structure, space, and change. Results like this are derived from definitions and logical proof (or from established formulas).<br><br>Fluency with such facts supports science, engineering, data analysis, and clear reasoning.` + footer;
+        return `<strong>Answer: ${ans}</strong><br><br>Mathematically, the result is <strong>${ans}</strong>.<br><br>For “${shortQ}?”, this follows from definition or calculation. Knowing it supports further problem-solving.` + footer;
       }
       if (topic === 'ai') {
-        return `Correct answer: <strong>${ans}</strong>.<br><br>Artificial intelligence covers algorithms and systems that perform tasks that typically require intelligence — learning from data, recognizing patterns, generating language or images, and making decisions. This concept is part of the current technical vocabulary of machine learning and AI research.<br><br>Understanding it helps you follow how modern AI products work, what they can and cannot do, and why topics like training data, models, and alignment matter.` + footer;
+        return `<strong>Answer: ${ans}</strong><br><br>In AI / machine learning, the answer is <strong>${ans}</strong>.<br><br>For “${shortQ}?”, this is a standard idea about models, training, data, or evaluation. It helps you understand how modern AI systems work and where their limits are.` + footer;
       }
       if (topic === 'philosophy') {
-        return `Correct answer: <strong>${ans}</strong>.<br><br>Philosophy examines fundamental questions about knowledge, reality, ethics, mind, and meaning. This answer refers to a recognized idea, argument, or figure in that tradition.<br><br>Engaging with it sharpens critical thinking: you learn how arguments are built, where assumptions hide, and how different frameworks answer the same deep questions.` + footer;
+        return `<strong>Answer: ${ans}</strong><br><br>In philosophy, the answer is <strong>${ans}</strong>.<br><br>For “${shortQ}?”, this refers to a recognised concept, argument, or thinker in the tradition of careful reasoning about knowledge, ethics, mind, and reality.` + footer;
       }
       if (topic === 'business') {
-        return `Correct answer: <strong>${ans}</strong>.<br><br>Business and economics deal with how organizations create value, allocate resources, and operate in markets. This term or fact is standard in that domain — finance, strategy, marketing, or organizational design.<br><br>Knowing it helps you read company news, understand markets, and make sense of how firms and economies function.` + footer;
+        return `<strong>Answer: ${ans}</strong><br><br>In business / economics, the answer is <strong>${ans}</strong>.<br><br>For “${shortQ}?”, this is a standard term or fact about firms, markets, or finance.` + footer;
       }
 
-      // Category fallbacks with more substance
       if (cat.includes('geography')) {
-        return `Correct answer: <strong>${ans}</strong>.<br><br>This is a verified geographical fact (place, physical feature, or political geography). Geography links physical landscapes with human organization of the planet.<br><br>It helps you interpret maps, news about regions, climate, migration, and global connections.` + footer;
+        return `<strong>Answer: ${ans}</strong><br><br>Geographically, the answer is <strong>${ans}</strong>.<br><br>For “${shortQ}?”, this is a verified fact about a place or feature. It helps you place events and places in the real world.` + footer;
       }
       if (cat.includes('history')) {
-        return `Correct answer: <strong>${ans}</strong>.<br><br>This is the historically documented answer. History reconstructs past events from evidence so we can understand how institutions, conflicts, and ideas developed.<br><br>That context is what makes current politics, culture, and international affairs intelligible.` + footer;
+        return `<strong>Answer: ${ans}</strong><br><br>Historically, the answer is <strong>${ans}</strong>.<br><br>For “${shortQ}?”, this is the documented person, event, or date.` + footer;
       }
       if (cat.includes('science') || cat.includes('nature') || cat.includes('computer') || cat.includes('mathematics')) {
-        return `Correct answer: <strong>${ans}</strong>.<br><br>This is the accepted scientific or technical answer, grounded in observation, experiment, or mathematical definition.<br><br>Scientific literacy of this kind supports everyday decisions about technology, health, and how the natural and engineered world works.` + footer;
+        return `<strong>Answer: ${ans}</strong><br><br>The scientific answer is <strong>${ans}</strong>.<br><br>For “${shortQ}?”, this is the accepted result based on observation, experiment, or definition.` + footer;
       }
       if (cat.includes('film') || cat.includes('entertainment')) {
-        return `Correct answer: <strong>${ans}</strong>.<br><br>This is a documented fact from film or popular culture — credits, plot, or widely reported production history.<br><br>Shared cultural references make media easier to discuss and help you see how stories and styles influence public conversation.` + footer;
+        return `<strong>Answer: ${ans}</strong><br><br>The correct answer is <strong>${ans}</strong>.<br><br>For “${shortQ}?”, this is a documented credit or detail from entertainment history.` + footer;
       }
 
-      // Final fallback — still explanatory
-      return `The question was: “${shortQ}?”<br><br>The correct answer is <strong>${ans}</strong>.<br><br>This is the standard, documented response. General-knowledge items like this connect to broader themes in science, history, geography, culture, or current affairs — which is why they appear in quizzes and education.` + footer;
+      return `<strong>Answer: ${ans}</strong><br><br>For “${shortQ}?”, the correct answer is <strong>${ans}</strong>.<br><br>This is the standard documented response for this question.` + footer;
     }
 
     init();
