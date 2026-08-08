@@ -479,17 +479,19 @@
   </div>
 
   <script>
+    // Rank requires BOTH volume of correct answers AND lifetime accuracy.
+    // Thresholds are intentionally steep.
     const RANKS = [
-      { level: 1,  name: 'Novice',       xp: 0,    diff: 'easy' },
-      { level: 2,  name: 'Apprentice',   xp: 100,  diff: 'easy' },
-      { level: 3,  name: 'Student',      xp: 250,  diff: 'medium' },
-      { level: 4,  name: 'Scholar',      xp: 450,  diff: 'medium' },
-      { level: 5,  name: 'Expert',       xp: 700,  diff: 'hard' },
-      { level: 6,  name: 'Master',       xp: 1000, diff: 'hard' },
-      { level: 7,  name: 'PhD',          xp: 1400, diff: 'hard' },
-      { level: 8,  name: 'Professor',    xp: 1900, diff: 'hard' },
-      { level: 9,  name: 'Grandmaster',  xp: 2500, diff: 'hard' },
-      { level: 10, name: 'God Mode',     xp: 3200, diff: 'hard' }
+      { level: 1,  name: 'Novice',      correct: 0,    accuracy: 0,    games: 0,   diff: 'easy' },
+      { level: 2,  name: 'Apprentice',  correct: 40,   accuracy: 0.55, games: 5,   diff: 'easy' },
+      { level: 3,  name: 'Student',     correct: 120,  accuracy: 0.60, games: 12,  diff: 'medium' },
+      { level: 4,  name: 'Scholar',     correct: 280,  accuracy: 0.65, games: 25,  diff: 'medium' },
+      { level: 5,  name: 'Expert',      correct: 500,  accuracy: 0.70, games: 45,  diff: 'hard' },
+      { level: 6,  name: 'Master',      correct: 850,  accuracy: 0.74, games: 75,  diff: 'hard' },
+      { level: 7,  name: 'PhD',         correct: 1400, accuracy: 0.78, games: 120, diff: 'phd' },
+      { level: 8,  name: 'Professor',   correct: 2200, accuracy: 0.82, games: 180, diff: 'phd' },
+      { level: 9,  name: 'Grandmaster', correct: 3500, accuracy: 0.86, games: 280, diff: 'god' },
+      { level: 10, name: 'God Mode',    correct: 5500, accuracy: 0.90, games: 400, diff: 'god' }
     ];
 
     const state = {
@@ -510,30 +512,66 @@
       wasCorrect: false
     };
 
-    let progress = JSON.parse(localStorage.getItem('trivia_progress') || '{"xp":0,"games":0}');
+    // Migrate old progress shape if needed
+    let progress = JSON.parse(localStorage.getItem('trivia_progress') || '{}');
+    if (typeof progress.correct !== 'number') progress.correct = 0;
+    if (typeof progress.answered !== 'number') progress.answered = 0;
+    if (typeof progress.games !== 'number') progress.games = 0;
+    // Keep xp only for display legacy; rank no longer uses it
+    if (typeof progress.xp !== 'number') progress.xp = 0;
+
     let mastered = new Set(JSON.parse(localStorage.getItem('trivia_mastered') || '[]'));
 
-    function getRank(xp) {
+    function lifetimeAccuracy() {
+      if (!progress.answered) return 0;
+      return progress.correct / progress.answered;
+    }
+
+    function qualifiesFor(rank) {
+      return progress.correct >= rank.correct
+        && lifetimeAccuracy() >= rank.accuracy
+        && progress.games >= rank.games;
+    }
+
+    function getRank() {
       let rank = RANKS[0];
       for (const r of RANKS) {
-        if (xp >= r.xp) rank = r;
+        if (qualifiesFor(r)) rank = r;
+        else break;
       }
       return rank;
     }
 
-    function getNextRank(xp) {
-      const current = getRank(xp);
+    function getNextRank() {
+      const current = getRank();
       const idx = RANKS.findIndex(r => r.level === current.level);
       return RANKS[idx + 1] || null;
     }
 
-    function xpForNext(xp) {
-      const next = getNextRank(xp);
-      if (!next) return { current: xp, needed: xp, pct: 100 };
-      const prev = getRank(xp);
-      const range = next.xp - prev.xp;
-      const into = xp - prev.xp;
-      return { current: into, needed: range, pct: Math.min(100, (into / range) * 100) };
+    /** Progress toward the next rank as a single 0–100 value (strictest remaining requirement). */
+    function rankProgress() {
+      const next = getNextRank();
+      if (!next) return { pct: 100, label: 'Max rank', detail: 'God Mode reached' };
+
+      const acc = lifetimeAccuracy();
+      const pCorrect = Math.min(1, progress.correct / next.correct);
+      const pAcc = next.accuracy > 0 ? Math.min(1, acc / next.accuracy) : 1;
+      const pGames = Math.min(1, progress.games / next.games);
+      // Overall = geometric mean so one weak area holds you back
+      const pct = Math.pow(pCorrect * pAcc * pGames, 1 / 3) * 100;
+
+      const parts = [];
+      parts.push(`${progress.correct}/${next.correct} correct`);
+      parts.push(`${Math.round(acc * 100)}% / ${Math.round(next.accuracy * 100)}% accuracy`);
+      parts.push(`${progress.games}/${next.games} games`);
+
+      return {
+        pct: Math.min(99.5, pct),
+        label: parts.join(' · '),
+        detail: `Next: ${next.name}`,
+        pCorrect, pAcc, pGames,
+        next
+      };
     }
 
     function saveProgress() {
@@ -541,36 +579,40 @@
     }
 
     function updateHomeUI() {
-      const rank = getRank(progress.xp);
-      const next = getNextRank(progress.xp);
-      const xpInfo = xpForNext(progress.xp);
+      const rank = getRank();
+      const prog = rankProgress();
+      const acc = lifetimeAccuracy();
 
       document.getElementById('rank-name').textContent = rank.name;
       document.getElementById('level-badge').textContent = `Level ${rank.level}`;
-      document.getElementById('level-progress').style.width = `${xpInfo.pct}%`;
-      document.getElementById('xp-text').textContent = next
-        ? `${xpInfo.current} / ${xpInfo.needed} XP`
-        : 'Max rank reached';
-      document.getElementById('next-rank').textContent = next ? `Next: ${next.name}` : 'God Mode';
+      document.getElementById('level-progress').style.width = `${prog.pct}%`;
+      document.getElementById('xp-text').textContent = prog.label;
+      document.getElementById('next-rank').textContent = prog.detail;
       document.getElementById('games-played').textContent = progress.games;
       document.getElementById('mastered-count').textContent = mastered.size;
+
+      // Optional: show lifetime accuracy if element exists
+      const accEl = document.getElementById('lifetime-acc');
+      if (accEl) accEl.textContent = progress.answered ? Math.round(acc * 100) + '%' : '—';
     }
 
     const CATS = [
       { id: null, name: 'Mixed' },
       { id: 9,  name: 'General' },
-      { id: 17, name: 'Physics',     topic: 'physics' },
-      { id: 17, name: 'Chemistry',   topic: 'chemistry' },
-      { id: 17, name: 'Biology',     topic: 'biology' },
-      { id: 19, name: 'Mathematics', topic: 'mathematics' },
-      { id: 18, name: 'AI',          topic: 'ai' },
-      { id: 9,  name: 'Philosophy',  topic: 'philosophy' },
-      { id: 9,  name: 'Business',    topic: 'business' },
+      { id: 17, name: 'Physics',            topic: 'physics' },
+      { id: 17, name: 'Chemistry',          topic: 'chemistry' },
+      { id: 17, name: 'Biology',            topic: 'biology' },
+      { id: 17, name: 'Medicine',           topic: 'medicine' },
+      { id: 17, name: 'Molecular Biology',  topic: 'molecular biology' },
+      { id: 19, name: 'Mathematics',        topic: 'mathematics' },
+      { id: 18, name: 'AI',                 topic: 'ai' },
+      { id: 9,  name: 'Philosophy',         topic: 'philosophy' },
+      { id: 9,  name: 'Business',           topic: 'business' },
       { id: 23, name: 'History' },
       { id: 22, name: 'Geography' },
-      { id: 11, name: 'Film' },
+      { id: 24, name: 'Politics' },
       { id: 18, name: 'Computers' },
-      { id: 21, name: 'Sports' }
+      { id: 27, name: 'Animals' }
     ];
 
     const DIFFS = [
@@ -644,7 +686,7 @@
 
     function resetAll() {
       if (!confirm('Reset all progress, levels, and mastered questions?')) return;
-      progress = { xp: 0, games: 0 };
+      progress = { xp: 0, games: 0, correct: 0, answered: 0 };
       mastered.clear();
       localStorage.removeItem('trivia_progress');
       localStorage.removeItem('trivia_mastered');
@@ -719,6 +761,180 @@
       startGame();
     }
 
+    /** Keep only online questions that look like useful general knowledge. */
+    function isUsefulOnlineQuestion(q) {
+      const cat = (q.category || '').toLowerCase();
+      const text = ((q.question || '') + ' ' + (q.correct_answer || '')).toLowerCase();
+
+      // Reject entertainment / celebrity / pure sports trivia categories
+      if (/entertainment|celebrities|sports|vehicles|comics|anime|manga|cartoon|video games|board games|musicals|television|film|music/.test(cat)) {
+        return false;
+      }
+
+      // Reject niche pop-culture and pure trivia patterns
+      const reject = [
+        /\b(pokemon|mario|zelda|minecraft|fortnite|call of duty|harry potter|star wars|marvel|dc comics|disney|simpsons|friends|breaking bad)\b/,
+        /\b(which actor|which actress|which film|which movie|which song|which album|which band|which tv show)\b/,
+        /\b(nba|nfl|mlb|nhl|fifa world cup winner in|uefa champions)\b/,
+        /\b(isbn|unicode character|html color code|hex code for)\b/,
+        /\b(first name of|middle name of|birth name of)\b.*\b(actor|actress|singer|rapper)\b/,
+        /\b(who played|who voiced|who directed the film|who starred in)\b/
+      ];
+      if (reject.some(re => re.test(text))) return false;
+
+      // Prefer science, geography, history, politics, maths, computers, animals, general
+      if (/science|geography|history|politics|mathematics|computers|animals|nature|general knowledge|art/.test(cat)) {
+        return true;
+      }
+
+      // Unknown category: keep only if it does not look like entertainment trivia
+      return !/who (sang|wrote the song|composed)|which (band|singer|album)/.test(text);
+    }
+
+    /** Useful general knowledge at increasing depth (1 foundational → 5 deep). */
+    function getUsefulFallback() {
+      const Q = (depth, topic, category, question, correct, wrong, explanation) => ({
+        depth, topic, category, question, correct_answer: correct, incorrect_answers: wrong,
+        explanation: explanation || ('The correct answer is <strong>' + correct + '</strong>.')
+      });
+      return [
+        Q(1,'geography','Geography','What is the capital of France?','Paris',['Lyon','Marseille','Nice'],'Paris is the capital and political centre of France.'),
+        Q(1,'geography','Geography','How many continents are commonly recognised?','7',['5','6','8'],'Africa, Antarctica, Asia, Europe, North America, South America, Australia/Oceania.'),
+        Q(1,'geography','Geography','Which is the largest ocean?','Pacific Ocean',['Atlantic Ocean','Indian Ocean','Arctic Ocean'],'The Pacific is the largest and deepest ocean.'),
+        Q(1,'geography','Geography','What is the capital of Japan?','Tokyo',['Osaka','Kyoto','Nagoya'],'Tokyo is Japan’s capital and a major global city.'),
+        Q(1,'history','History','In which year did World War II end in Europe?','1945',['1944','1946','1939'],'Germany surrendered in May 1945; Japan in August 1945.'),
+        Q(1,'history','History','Who was the first US President?','George Washington',['Thomas Jefferson','Abraham Lincoln','John Adams'],'Washington served 1789–1797.'),
+        Q(1,'biology','Science & Nature','What is the basic unit of life?','Cell',['Atom','Molecule','Tissue'],'All living organisms are made of cells.'),
+        Q(1,'biology','Science & Nature','What molecule carries genetic information?','DNA',['RNA','Protein','Lipid'],'DNA stores genetic instructions for living organisms.'),
+        Q(1,'biology','Science & Nature','How many chambers does a human heart have?','4',['2','3','5'],'Two atria and two ventricles.'),
+        Q(1,'chemistry','Science & Nature','What is the chemical formula for water?','H2O',['CO2','O2','NaCl'],'Two hydrogen atoms bonded to one oxygen.'),
+        Q(1,'chemistry','Science & Nature','What gas do plants absorb for photosynthesis?','Carbon dioxide',['Oxygen','Nitrogen','Hydrogen'],'Plants take in CO₂ and release oxygen.'),
+        Q(1,'physics','Science & Nature','What force keeps planets in orbit?','Gravity',['Magnetism','Friction','Inertia'],'Gravity is attraction between masses.'),
+        Q(1,'physics','Science & Nature','SI unit of force?','Newton',['Joule','Watt','Pascal'],'One newton accelerates 1 kg by 1 m/s².'),
+        Q(1,'mathematics','Science: Mathematics','What is 25% of 200?','50',['25','40','100'],'(25/100)×200 = 50. Percentages are used in tax, discounts, and stats.'),
+        Q(1,'mathematics','Science: Mathematics','Sum of angles in a triangle?','180 degrees',['90 degrees','360 degrees','270 degrees'],'Interior angles of a triangle sum to 180°.'),
+        Q(1,'business','General Knowledge','What does GDP stand for?','Gross Domestic Product',['General Domestic Product','Gross Development Plan','Global Domestic Product'],'Total value of goods and services produced in a country.'),
+        Q(1,'business','General Knowledge','Market with only one seller?','Monopoly',['Oligopoly','Monopsony','Perfect competition'],'Monopolies can set prices with little competition.'),
+        Q(1,'business','General Knowledge','What does ROI stand for?','Return on Investment',['Rate of Interest','Return of Income','Risk of Investment'],'Compares gain from an investment to its cost.'),
+        Q(1,'ai','Science: Computers','What does AI stand for?','Artificial Intelligence',['Automated Intelligence','Advanced Informatics','Algorithmic Integration'],'Systems that perform tasks typically requiring human intelligence.'),
+        Q(1,'ai','Science: Computers','What is machine learning?','A subset of AI that learns from data',['A type of database','A programming language','A hardware component'],'Systems improve using examples rather than fully hand-coded rules.'),
+        Q(1,'philosophy','General Knowledge','Who said “I think, therefore I am”?','René Descartes',['Immanuel Kant','Plato','Aristotle'],'Doubting proves a thinking self exists.'),
+        Q(1,'philosophy','General Knowledge','Philosophy branch for moral values?','Ethics',['Logic','Metaphysics','Aesthetics'],'Ethics asks how we should act.'),
+        Q(1,null,'General Knowledge','Degrees in a full circle?','360',['180','270','90'],'A full rotation is 360°.'),
+        Q(1,null,'General Knowledge','Freezing point of water in Celsius?','0',['32','100','-10'],'Water freezes at 0°C under standard conditions.'),
+        Q(1,null,'Science: Computers','What does HTML stand for?','HyperText Markup Language',['High Tech Modern Language','Hyper Tool Multi Language','Home Text Markup Language'],'HTML structures web pages.'),
+        Q(1,null,'Science: Computers','Bits in a byte?','8',['4','16','32'],'A byte is 8 bits.'),
+
+        Q(2,'geography','Geography','Capital of Australia?','Canberra',['Sydney','Melbourne','Perth'],'Chosen as a compromise between Sydney and Melbourne.'),
+        Q(2,'geography','Geography','Africa’s most populous country?','Nigeria',['Ethiopia','Egypt','South Africa'],'Key for regional economics and politics.'),
+        Q(2,'geography','Geography','Longest river commonly cited?','Nile',['Amazon','Yangtze','Mississippi'],'Nile often cited as longest; Amazon largest by volume.'),
+        Q(2,'history','History','Year the Berlin Wall fell?','1989',['1987','1991','1985'],'Turning point ending Cold War division of Europe.'),
+        Q(2,'history','History','Who wrote Romeo and Juliet?','William Shakespeare',['Charles Dickens','Jane Austen','Mark Twain'],'Foundational English literature.'),
+        Q(2,'history','History','Which empire built the Colosseum?','Roman Empire',['Greek Empire','Ottoman Empire','Byzantine Empire'],'Roman engineering and public life.'),
+        Q(2,'biology','Science & Nature','Powerhouse of the cell?','Mitochondria',['Nucleus','Ribosome','Golgi apparatus'],'Produce most of the cell’s ATP.'),
+        Q(2,'biology','Science & Nature','Universal donor blood type?','O negative',['A positive','AB positive','B negative'],'Can generally be given in emergencies when matching is unavailable.'),
+        Q(2,'biology','Science & Nature','How do plants make food with light?','Photosynthesis',['Respiration','Transpiration','Fermentation'],'Converts light, water, and CO₂ into sugars and oxygen.'),
+        Q(2,'chemistry','Science & Nature','pH of pure water at 25°C?','7',['0','5','14'],'pH 7 is neutral.'),
+        Q(2,'chemistry','Science & Nature','Chemical symbol for sodium?','Na',['So','Sd','S'],'From Latin natrium.'),
+        Q(2,'chemistry','Science & Nature','Bond that shares electron pairs?','Covalent bond',['Ionic bond','Metallic bond','Hydrogen bond'],'Holds many molecules together, including water.'),
+        Q(2,'physics','Science & Nature','Ohm’s law?','V = IR',['F = ma','E = mc²','PV = nRT'],'Voltage equals current times resistance.'),
+        Q(2,'physics','Science & Nature','Unit of electrical resistance?','Ohm',['Volt','Ampere','Watt'],'Resistance limits current flow.'),
+        Q(2,'mathematics','Science: Mathematics','Approximate value of π?','3.14159',['2.71828','1.61803','1.41421'],'Ratio of circumference to diameter.'),
+        Q(2,'mathematics','Science: Mathematics','Area of a circle with radius r?','πr²',['2πr','πd','r²'],'Area = π × radius².'),
+        Q(2,'business','General Knowledge','What is inflation?','General rise in prices and fall in purchasing power',['Fall in prices','Only rising unemployment','Currency stability'],'Affects savings, wages, and debt.'),
+        Q(2,'business','General Knowledge','What is opportunity cost?','Value of the next best alternative given up',['Only accounting cost','A sunk cost','Total expenses'],'Every choice has a trade-off.'),
+        Q(2,'business','General Knowledge','What is compound interest?','Interest on principal plus previously earned interest',['Interest only on original principal','A flat fee','A stock dividend'],'Grows savings and debt over time.'),
+        Q(2,'ai','Science: Computers','What is supervised learning?','Learning from labelled examples',['Learning without data','Learning only from rewards','Random guessing'],'Train on input–output pairs.'),
+        Q(2,'ai','Science: Computers','What does LLM stand for?','Large Language Model',['Linear Learning Module','Logical Language Machine','Long Latency Model'],'Powers modern chat and writing tools.'),
+        Q(2,'philosophy','General Knowledge','Utilitarianism’s core idea?','Promote the greatest overall happiness',['Duty regardless of outcomes','Only personal pleasure','Obey tradition only'],'Judge actions by consequences for welfare.'),
+        Q(2,'philosophy','General Knowledge','Study of knowledge called?','Epistemology',['Ontology','Ethics','Aesthetics'],'What we can know and how belief is justified.'),
+        Q(2,null,'General Knowledge','What does GDP measure?','Total value of goods and services produced in a country',['Only government spending','Only exports','Stock market size'],'Primary scoreboard for economic size and growth.'),
+        Q(2,null,'Science: Computers','What does URL stand for?','Uniform Resource Locator',['Universal Resource Link','Uniform Retrieval Locator','Universal Reference Locator'],'A web address.'),
+        Q(2,null,'History','First human Moon landing year?','1969',['1967','1971','1965'],'Apollo 11 — landmark of science and engineering.'),
+
+        Q(3,'geography','Geography','Why is Canberra the capital, not Sydney?','Planned compromise between Sydney and Melbourne',['Largest city','Best harbour','First British settlement'],'Capitals often reflect political balance, not size.'),
+        Q(3,'geography','Geography','Main cause of seasons?','Tilt of Earth’s axis relative to its orbit',['Changing distance from Sun only','Solar flares','Ocean currents alone'],'Tilt changes sunlight angle and day length.'),
+        Q(3,'history','History','Marshall Plan’s main purpose?','Aid European recovery and limit communism’s spread',['Occupy Japan permanently','Create the UN','Rebuild only US military'],'Shaped the postwar European order.'),
+        Q(3,'history','History','Separation of powers aims to prevent?','Unchecked authority in one branch of government',['All taxes','International trade','Free speech'],'Core constitutional design in many democracies.'),
+        Q(3,'biology','Science & Nature','What is antibiotic resistance?','Bacteria evolve so antibiotics stop working effectively',['Humans allergic to all drugs','Viruses become bacteria','Vaccines fail on viruses only'],'A major public-health threat driven partly by misuse.'),
+        Q(3,'biology','Science & Nature','Main role of vaccines?','Train the immune system without full disease',['Kill bacteria like antibiotics','Replace hygiene','Cure genetic disorders'],'Among the most effective public-health tools.'),
+        Q(3,'chemistry','Science & Nature','Greenhouse gas main effect?','Traps heat in Earth’s atmosphere',['Only depletes ozone','Cools the planet','Only causes acid rain'],'CO₂ and methane change the energy balance.'),
+        Q(3,'chemistry','Science & Nature','Element vs compound?','Element: one atom type. Compound: bonded different elements',['They are the same','Compound always metal','Element always has oxygen'],'Basic chemical literacy.'),
+        Q(3,'physics','Science & Nature','E = mc² means?','Mass–energy equivalence',['Ohm’s law','Newton’s second law','Hooke’s law'],'Basis of nuclear energy and modern physics.'),
+        Q(3,'physics','Science & Nature','Weather vs climate?','Weather is short-term; climate is long-term averages',['They are the same','Climate is only today’s temperature','Weather is only rain'],'Climate is statistics over decades.'),
+        Q(3,'mathematics','Science: Mathematics','A percentage is?','A rate per hundred',['Fixed amount of money','Only a probability','Non-convertible fraction'],'Lets you compare rates across totals.'),
+        Q(3,'mathematics','Science: Mathematics','What is the median?','Middle value when data are ordered',['Average of all values','Most frequent value','Largest value'],'Robust to outliers — useful for income and prices.'),
+        Q(3,'business','General Knowledge','Central banks often focus on?','Inflation (price stability) and employment/growth',['Only stock prices','Only elections','Only bank holidays'],'Monetary policy stabilises the economy.'),
+        Q(3,'business','General Knowledge','Diversification means?','Spreading investments to reduce single-asset risk',['All money in one stock','Avoiding markets','Only cash'],'Basic long-term risk management.'),
+        Q(3,'ai','Science: Computers','What is overfitting?','Fits training data too closely; fails on new data',['Model too simple','Training too slow','Data perfect'],'Why validation and simpler models matter.'),
+        Q(3,'ai','Science: Computers','LLM “hallucination”?','Plausible but false information',['Seeing images','Hardware overheating','Network lag'],'Sound confident while wrong — verify claims.'),
+        Q(3,'philosophy','General Knowledge','Kant’s categorical imperative?','Act only on maxims you could will as universal law',['Maximise pleasure only','Will to power','Epicurean pleasure'],'Duty-based alternative to utilitarianism.'),
+        Q(3,'philosophy','General Knowledge','Rawls’s veil of ignorance?','Design justice without knowing your social position',['Blindness','Religious ritual','Scientific method'],'Argues for principles protecting the least advantaged.'),
+        Q(3,null,'General Knowledge','Confirmation bias?','Favouring info that confirms existing beliefs',['Perfectly neutral reasoning','Only a formula','Computer error'],'Improves judgment when recognised.'),
+        Q(3,null,'Science: Computers','Risk of reusing weak passwords?','One breach can open many accounts',['Faster typing','Better encryption','Less electricity'],'Use unique passwords and a manager.'),
+        Q(3,null,'History','Major cause of 2008 financial crisis?','Housing collapse and related financial products',['Only oil embargoes','Only a pandemic','Only one small currency'],'Leverage and risk misjudgment went global.'),
+
+        Q(4,'geography','Geography','Demographic transition describes?','Shift from high to low birth and death rates with development',['Only migration laws','Only climate','Only architecture'],'Explains population growth and ageing societies.'),
+        Q(4,'history','History','1648 Peace of Westphalia significance?','Helped establish sovereign-state non-interference norms',['Created the EU','Ended WWI','Abolished monarchy worldwide'],'Still shapes borders and intervention debates.'),
+        Q(4,'biology','Science & Nature','Herd immunity?','Enough immunity that a pathogen struggles to spread',['Everyone infected at once','Antibiotics banned','Only animals vaccinated'],'Can protect people who cannot be immunised.'),
+        Q(4,'biology','Science & Nature','Central dogma (simplified)?','DNA → RNA → Protein',['Protein → RNA → DNA','RNA → DNA → Protein','DNA → Protein → RNA'],'Basis of genetics and biotech.'),
+        Q(4,'chemistry','Science & Nature','Ocean acidification mainly from?','CO₂ dissolving in seawater forming carbonic acid',['Only plastic','Only oil spills','Only warmer air'],'Harms reefs and shell-forming organisms.'),
+        Q(4,'physics','Science & Nature','Second law of thermodynamics (plain)?','Entropy of isolated systems tends to increase',['Energy created freely','Perpetual motion easy','Heat flows to hotter objects'],'Limits engines; useful energy disperses.'),
+        Q(4,'mathematics','Science: Mathematics','What is a base rate?','Underlying frequency of a class before new evidence',['Only final answer','Interest rate','Max probability'],'Ignoring it causes major reasoning errors.'),
+        Q(4,'mathematics','Science: Mathematics','Correlation does not imply?','Causation',['Any relationship','Association','A number from -1 to 1'],'Variables can move together without causation.'),
+        Q(4,'business','General Knowledge','Moral hazard?','Taking more risk because you do not bear full costs',['Perfect competition','Falling prices','Trade bans'],'Insurance and bailouts must manage this.'),
+        Q(4,'business','General Knowledge','Comparative advantage?','Lower opportunity cost than another producer',['Make everything yourself','Best at all goods','Avoid trade'],'Trade can benefit both sides.'),
+        Q(4,'ai','Science: Computers','AI alignment problem?','Ensure advanced AI acts per human values and intent',['Match screen colours','Sync clocks','Only scale models'],'Central as systems gain capability.'),
+        Q(4,'ai','Science: Computers','RLHF is for?','Steering models with human preference rewards',['Train only on raw text','Cool hardware','Compress images'],'Tunes chat models to be more helpful and safer.'),
+        Q(4,'philosophy','General Knowledge','Negative vs positive liberty?','Negative: freedom from interference. Positive: capacity to act',['Identical','Negative always worse','Positive means no laws'],'Frames rights and state-power debates.'),
+        Q(4,'philosophy','General Knowledge','Problem of induction?','Justifying that the future will resemble the past',['Pure math puzzle','Only deduction','Political theory'],'Science relies on induction; know its limits.'),
+        Q(4,null,'General Knowledge','External validity?','How well results generalise beyond the study',['Math correctness only','Only sample size','Author fame'],'Rigorous studies may not apply to your setting.'),
+        Q(4,null,'Science: Computers','End-to-end encryption?','Only sender and recipient can read content',['Company always can read','Only server-disk encryption','A password type'],'Protects privacy; complicates lawful access.'),
+
+        Q(5,'geography','Geography','Why is the Sahara a desert?','Descending dry air from Hadley-cell circulation, plus geography',['Always winter','No sunlight','Covered by ocean'],'Atmospheric circulation creates subtropical deserts.'),
+        Q(5,'history','History','Bretton Woods mainly established?','Postwar monetary order (IMF, World Bank frameworks)',['The EU','NATO command only','Abolition of currencies'],'Still shapes global finance and development.'),
+        Q(5,'biology','Science & Nature','Why genetic diversity matters?','Raises chance some survive change or disease',['Always lowers fitness','Makes cloning easier','Only for plants'],'Buffer for ecosystems and agriculture.'),
+        Q(5,'chemistry','Science & Nature','Haber–Bosch process for?','Synthesising ammonia for fertiliser',['Desalination','Plastics only','Enriching uranium'],'Enabled modern agriculture — with environmental costs.'),
+        Q(5,'physics','Science & Nature','Uncertainty principle about?','Limits on knowing pairs like position and momentum together',['Lab error only','Rounding error','Only black holes'],'Quantum principle, not just instrument imprecision.'),
+        Q(5,'mathematics','Science: Mathematics','Bayesian updating?','Revise hypothesis probability when evidence arrives',['Ignore priors','Always pick extremes','Only an average'],'Formal learning from evidence.'),
+        Q(5,'business','General Knowledge','Adverse selection?','Asymmetric info draws higher-risk participants',['Perfect information','Prices fixed by law','Supply always exceeds demand'],'Can cause insurance/credit markets to fail.'),
+        Q(5,'ai','Science: Computers','Narrow AI vs AGI?','Narrow: specialised. AGI: human-level flexibility across domains',['Same thing','AGI in calculators','Narrow cannot use data'],'Current systems are narrow; AGI is a future horizon.'),
+        Q(5,'philosophy','General Knowledge','Trolley problem probes?','Moral intuitions about harming few to save many',['Transit design only','Time travel','Stock trading'],'Tension between outcomes and constraints on harming.'),
+        Q(5,null,'General Knowledge','Regression to the mean?','Extreme results tend to be followed by more average ones',['Things always worsen','Political slogan','Only medical treatment'],'Misreading it causes false claims about interventions.'),
+        Q(5,null,'Science: Computers','Zero-day vulnerability?','Flaw unknown to vendor (or unpatched) that can be exploited',['Bug fixed on day zero','Hardware warranty','Password policy'],'Why rapid patching matters.'),
+        Q(5,null,'History','Path dependence?','Earlier choices constrain later options',['History always repeats exactly','Only geography','Individuals never matter'],'Institutions lock in patterns; reform must account for inertia.'),
+
+        // —— Medicine ——
+        Q(1,'medicine','Science & Nature','What is the normal resting heart rate range for most healthy adults (approx.)?','60–100 beats per minute',['20–40','150–200','10–20'],'Resting heart rate is a basic vital sign used in everyday health assessment.'),
+        Q(1,'medicine','Science & Nature','What does BMI stand for?','Body Mass Index',['Blood Molecule Index','Basic Metabolic Indicator','Bone Mass Inventory'],'BMI estimates body fat from height and weight — a screening tool, not a full diagnosis.'),
+        Q(1,'medicine','Science & Nature','Which organ produces insulin?','Pancreas',['Liver','Kidney','Spleen'],'Insulin regulates blood sugar. Its failure is central to diabetes.'),
+        Q(2,'medicine','Science & Nature','What is hypertension?','Chronically high blood pressure',['Low blood sugar','Fast heart rate only','Low oxygen in blood'],'A major risk factor for heart attack, stroke, and kidney disease.'),
+        Q(2,'medicine','Science & Nature','What is the difference between a virus and a bacterium?','Bacteria are living cells; viruses need host cells to replicate',['Viruses are larger','Bacteria cannot cause disease','They are the same'],'Antibiotics target bacteria, not viruses — a key public-health distinction.'),
+        Q(2,'medicine','Science & Nature','What is a placebo?','An inactive treatment used for comparison in trials',['A strong antibiotic','A surgical tool','A type of vaccine'],'Placebo controls help separate real drug effects from expectation effects.'),
+        Q(3,'medicine','Science & Nature','What is sepsis?','A life-threatening response to infection that damages organs',['A mild cold','Only a skin rash','A broken bone'],'Early recognition of sepsis saves lives.'),
+        Q(3,'medicine','Science & Nature','What does “randomized controlled trial” test?','Whether a treatment works by randomly assigning people to treatment or control',['Only patient opinions','Only laboratory animals','Marketing claims'],'RCTs are a gold standard for evidence in medicine.'),
+        Q(3,'medicine','Science & Nature','What is informed consent?','Agreeing to a procedure after understanding risks, benefits, and alternatives',['Signing any form without reading','Doctor decides alone','Insurance approval only'],'Core ethical requirement in medical care and research.'),
+        Q(4,'medicine','Science & Nature','What is antimicrobial stewardship?','Using antibiotics wisely to preserve effectiveness and limit resistance',['Prescribing antibiotics for every cold','Banning all antibiotics','Only hospital cleaning'],'Protects future patients from resistant infections.'),
+        Q(4,'medicine','Science & Nature','What is metastatic cancer?','Cancer that has spread from its original site to other parts of the body',['Cancer only in the skin','A benign tumor','An infection'],'Stage and spread guide prognosis and treatment.'),
+        Q(5,'medicine','Science & Nature','What is relative risk vs absolute risk?','Relative compares rates between groups; absolute is the actual chance of an event',['They are identical','Relative is always smaller','Absolute ignores population size'],'Media often quotes relative risk; absolute risk is often more decision-relevant.'),
+
+        // —— Molecular Biology ——
+        Q(1,'molecular biology','Science & Nature','What does DNA stand for?','Deoxyribonucleic acid',['Dynamic Nuclear Acid','Dextrose Nucleic Agent','Dual Neuron Array'],'DNA is the molecule that stores genetic information in cells.'),
+        Q(1,'molecular biology','Science & Nature','What are the four bases in DNA?','A, T, C, G (adenine, thymine, cytosine, guanine)',['A, B, C, D','X, Y, Z, W','Only A and T'],'Base pairing (A–T, C–G) underpins replication and the genetic code.'),
+        Q(2,'molecular biology','Science & Nature','What is a gene?','A segment of DNA that codes for a functional product, often a protein',['An entire chromosome','A type of cell','Only a disease'],'Genes are units of heredity and the basis of molecular biology.'),
+        Q(2,'molecular biology','Science & Nature','What is RNA’s main everyday role relative to DNA?','Carries and helps express genetic information (e.g. messenger RNA)',['Stores long-term genetic archive only','Is only found in viruses','Replaces the nucleus'],'RNA is central to turning DNA instructions into proteins.'),
+        Q(2,'molecular biology','Science & Nature','What is a protein made of?','Amino acids',['Fatty acids','Nucleotides only','Sugars only'],'Sequence of amino acids determines protein structure and function.'),
+        Q(3,'molecular biology','Science & Nature','What is PCR used for?','Amplifying specific DNA segments so they can be detected or studied',['Sequencing the whole genome only','Killing bacteria','Making proteins from scratch'],'PCR is foundational in diagnostics, forensics, and research.'),
+        Q(3,'molecular biology','Science & Nature','What is a mutation?','A change in the DNA sequence',['Always a disease','Only a virus infection','A type of cell division'],'Mutations can be neutral, harmful, or occasionally beneficial.'),
+        Q(3,'molecular biology','Science & Nature','What does CRISPR primarily enable?','Precise editing of DNA sequences',['Only measuring temperature','Only purifying water','Only counting cells'],'A powerful gene-editing tool with research and therapeutic uses.'),
+        Q(4,'molecular biology','Science & Nature','What is transcription?','Copying DNA into RNA',['Translating RNA into protein','DNA replication','Cell division'],'First major step of gene expression.'),
+        Q(4,'molecular biology','Science & Nature','What is translation (in molecular biology)?','Building a protein from mRNA instructions',['Copying DNA','Moving a gene between species only','Folding the nucleus'],'Ribosomes read mRNA and assemble amino acids into proteins.'),
+        Q(4,'molecular biology','Science & Nature','What is an enzyme?','A biological catalyst, usually a protein, that speeds reactions',['A type of fat','A storage sugar','A structural hormone only'],'Enzymes make metabolism possible at life-compatible speeds.'),
+        Q(5,'molecular biology','Science & Nature','What is epigenetics (simplified)?','Heritable changes in gene activity without changing the DNA sequence itself',['Only mutations in DNA letters','Only cloning','Only viral infection'],'Environment and development can influence gene expression patterns.'),
+        Q(5,'molecular biology','Science & Nature','What is alternative splicing?','One gene producing multiple RNA/protein variants by selective exon use',['Deleting all genes','Only bacterial division','Only DNA repair'],'Increases protein diversity from a limited number of genes.')
+      ];
+    }
+
     async function startGame() {
       state.score = 0;
       state.correct = 0;
@@ -734,31 +950,14 @@
       document.getElementById('score').textContent = '0';
       document.getElementById('feedback').classList.add('hidden');
 
-      const amount = Math.max(num * 4, 50);
-      let url = `https://opentdb.com/api.php?amount=${amount}&type=multiple`;
-      if (state.categoryId) url += `&category=${state.categoryId}`;
-      if (apiDiff) url += `&difficulty=${apiDiff}`;
-
-      try {
-        const res = await fetch(url);
-        const data = await res.json();
-        if (data.response_code !== 0) throw new Error();
-
-        let all = data.results.map(q => ({
-          ...q,
-          question: decode(q.question),
-          correct_answer: decode(q.correct_answer),
-          incorrect_answers: q.incorrect_answers.map(decode)
-        }));
-
-        let fresh = all.filter(q => !mastered.has(qKey(q)));
-        if (fresh.length < num) fresh = all;
-
-        shuffle(fresh);
-        state.questions = fresh.slice(0, num);
-      } catch {
-        // Fully offline mode — filter by topic if one is selected
-        let local = getFallback();
+      // Always prefer curated useful general knowledge (depth-scaled).
+      // Open Trivia DB is only a last-resort filler if the local bank is exhausted.
+      const pickLocal = () => {
+        let local = getUsefulFallback();
+        const depthMap = { easy: [1, 2], medium: [2, 3], hard: [3, 4], phd: [4, 5], god: [5] };
+        const depths = depthMap[state.difficulty] || [2, 3];
+        let depthFiltered = local.filter(q => depths.includes(q.depth || 2));
+        if (depthFiltered.length >= 3) local = depthFiltered;
         if (state.topic) {
           const topicFiltered = local.filter(q => (q.topic || '').toLowerCase() === state.topic);
           if (topicFiltered.length >= 3) local = topicFiltered;
@@ -769,7 +968,42 @@
         let fresh = local.filter(q => !mastered.has(qKey(q)));
         if (fresh.length < num) fresh = local;
         shuffle(fresh);
-        state.questions = fresh.slice(0, Math.min(num, fresh.length));
+        return fresh.slice(0, Math.min(num, fresh.length));
+      };
+
+      state.questions = pickLocal();
+
+      if (state.questions.length < num) {
+        try {
+          // Only categories that can yield useful general knowledge
+          const usefulCats = [9, 17, 18, 19, 22, 23, 24, 25, 27];
+          // 9 General, 17 Science&Nature, 18 Computers, 19 Maths,
+          // 22 Geography, 23 History, 24 Politics, 25 Art, 27 Animals
+          const cat = (state.categoryId && usefulCats.includes(state.categoryId))
+            ? state.categoryId
+            : usefulCats[Math.floor(Math.random() * usefulCats.length)];
+
+          const amount = Math.max(num * 5, 50);
+          let url = `https://opentdb.com/api.php?amount=${amount}&type=multiple&category=${cat}`;
+          if (apiDiff) url += `&difficulty=${apiDiff}`;
+          const res = await fetch(url);
+          const data = await res.json();
+          if (data.response_code === 0) {
+            let all = data.results.map(q => ({
+              ...q,
+              question: decode(q.question),
+              correct_answer: decode(q.correct_answer),
+              incorrect_answers: q.incorrect_answers.map(decode),
+              depth: apiDiff === 'hard' ? 3 : apiDiff === 'medium' ? 2 : 1
+            }));
+            all = all.filter(isUsefulOnlineQuestion);
+            let fresh = all.filter(q => !mastered.has(qKey(q)));
+            if (fresh.length < (num - state.questions.length)) fresh = all;
+            shuffle(fresh);
+            const need = num - state.questions.length;
+            state.questions = state.questions.concat(fresh.slice(0, need));
+          }
+        } catch (_) { /* stay with local only */ }
       }
 
       if (state.questions.length === 0) {
@@ -888,53 +1122,63 @@
     }
 
     function endGame() {
-      const accuracy = state.correct / state.questions.length;
-      let xpGain = Math.round(state.score * 0.8 + state.correct * 5);
-      if (accuracy >= 0.9) xpGain = Math.round(xpGain * 1.3);
-      if (state.difficulty === 'phd') xpGain = Math.round(xpGain * 1.4);
-      if (state.difficulty === 'god') xpGain = Math.round(xpGain * 1.7);
+      const total = state.questions.length || 1;
+      const accuracy = state.correct / total;
 
-      const oldRank = getRank(progress.xp);
-      progress.xp += xpGain;
+      const oldRank = getRank();
+
+      // Volume + accuracy drive rank — every answer counts
+      progress.correct += state.correct;
+      progress.answered += total;
       progress.games += 1;
+      // Soft XP only for display / legacy
+      let xpGain = state.correct * 10;
+      if (accuracy >= 0.9) xpGain = Math.round(xpGain * 1.5);
+      else if (accuracy < 0.5) xpGain = Math.round(xpGain * 0.5);
+      if (state.difficulty === 'phd') xpGain = Math.round(xpGain * 1.25);
+      if (state.difficulty === 'god') xpGain = Math.round(xpGain * 1.5);
+      progress.xp = (progress.xp || 0) + xpGain;
       saveProgress();
-      const newRank = getRank(progress.xp);
+
+      const newRank = getRank();
+      const prog = rankProgress();
+      const lifeAcc = lifetimeAccuracy();
 
       show('results');
 
       document.getElementById('final-score').textContent = state.score;
-      document.getElementById('final-correct').textContent = `${state.correct}/${state.questions.length}`;
+      document.getElementById('final-correct').textContent = `${state.correct}/${total}`;
       document.getElementById('final-mastered').textContent = state.newMastered;
 
       if (accuracy >= 0.9) {
         document.getElementById('result-title').textContent = 'Excellent';
-        document.getElementById('result-sub').textContent = 'Outstanding accuracy.';
+        document.getElementById('result-sub').textContent = Math.round(accuracy * 100) + '% this game — accuracy advances your rank.';
       } else if (accuracy >= 0.7) {
-        document.getElementById('result-title').textContent = 'Well played';
-        document.getElementById('result-sub').textContent = 'Solid performance.';
+        document.getElementById('result-title').textContent = 'Solid game';
+        document.getElementById('result-sub').textContent = Math.round(accuracy * 100) + '% correct. Higher accuracy unlocks ranks faster.';
       } else if (accuracy >= 0.5) {
-        document.getElementById('result-title').textContent = 'Good effort';
-        document.getElementById('result-sub').textContent = 'Keep climbing.';
+        document.getElementById('result-title').textContent = 'Keep grinding';
+        document.getElementById('result-sub').textContent = Math.round(accuracy * 100) + '% this game. Ranks need volume and precision.';
       } else {
-        document.getElementById('result-title').textContent = 'Keep going';
-        document.getElementById('result-sub').textContent = 'Every game builds mastery.';
+        document.getElementById('result-title').textContent = 'Tough round';
+        document.getElementById('result-sub').textContent = 'Low accuracy slows rank progress. Review explanations and try again.';
       }
 
       const levelup = document.getElementById('levelup-card');
       if (newRank.level > oldRank.level) {
         levelup.classList.remove('hidden');
         document.getElementById('new-rank').textContent = newRank.name;
-        document.getElementById('xp-gained').textContent = `+${xpGain} XP · You reached Level ${newRank.level}`;
+        document.getElementById('xp-gained').textContent =
+          `Level ${newRank.level} · Lifetime ${Math.round(lifeAcc * 100)}% accuracy · ${progress.correct} correct`;
       } else {
         levelup.classList.add('hidden');
       }
 
-      const xpInfo = xpForNext(progress.xp);
       document.getElementById('result-rank').textContent = newRank.name;
       document.getElementById('result-level').textContent = `Level ${newRank.level}`;
-      document.getElementById('result-progress').style.width = `${xpInfo.pct}%`;
-      document.getElementById('result-xp').textContent = getNextRank(progress.xp)
-        ? `${xpInfo.current} / ${xpInfo.needed} XP to next rank`
+      document.getElementById('result-progress').style.width = `${prog.pct}%`;
+      document.getElementById('result-xp').textContent = prog.next
+        ? prog.label
         : 'Maximum rank achieved — God Mode';
     }
 
